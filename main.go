@@ -2,6 +2,7 @@
 package main
 
 import (
+	"math/rand"
 	"wsClientRServe/csmapi"
 
 	"fmt"
@@ -18,7 +19,7 @@ const TABLE_PLAYERS_MAX int = 9
 
 var done chan interface{}
 var interrupt chan os.Signal
-var sendChan chan rcvMessage
+var sendChan chan [9]rcvMessage
 
 type rcvMessage struct {
 	TableID     int    `json:"tableID"`
@@ -49,7 +50,7 @@ func main() {
 
 	done = make(chan interface{})    // Channel to indicate that the receiverHandler is done
 	interrupt = make(chan os.Signal) // Channel to listen for interrupt signal to terminate gracefully
-	sendChan = make(chan rcvMessage)
+	sendChan = make(chan [9]rcvMessage)
 
 	signal.Notify(interrupt, os.Interrupt) // Notify the interrupt channel for SIGINT
 
@@ -105,7 +106,7 @@ func main() {
 	}
 }
 
-// connType: NONE,JOINED,WAITING,ACTIVATE,BNEXT,TIMEOUT,CLOSE
+// connType: RESERVED,JOINED,ASSINGED,WAITING,ACTIVATE,BNEXT,TIMEOUT,CLOSE
 // Create Next player info for sending
 func createNextPlayerMsg(usersMsg [9]rcvMessage, seatID int) rcvMessage {
 	var seatIDNext int
@@ -119,7 +120,7 @@ func createNextPlayerMsg(usersMsg [9]rcvMessage, seatID int) rcvMessage {
 			i = 0
 		}
 
-		if usersMsg[i].ConnType == "" || usersMsg[i].ConnType == "NONE" {
+		if usersMsg[i].ConnType == "RESERVED" {
 			continue
 		} else if i == seatID || usersMsg[i].ConnType != "" {
 			seatIDNext = i
@@ -139,6 +140,41 @@ func createNextPlayerMsg(usersMsg [9]rcvMessage, seatID int) rcvMessage {
 	return nextPlayerMsg
 }
 
+func createAutoPlayersForSpecificTable(TableUsers [9]rcvMessage) [9]rcvMessage {
+
+	var nickName = [...]string{"流逝的风", "每天赢5千", "不好就不要", "牛牛牛009", "风清猪的", "总是输没完了", "适度就是", "无畏了吗", "见好就收", "坚持到底", "三手要比", "不勉强", "搞不懂", "吴潇无暇", "大赌棍", "一直无感", "逍遥子", "风月浪", "独善其身", "赌神"}
+
+	randomNums := generateRandomNumber(0, 19, 3)
+
+	numofp := 0
+	for i := 0; i < 9; i++ {
+		if TableUsers[i].ConnType != "RESERVED" {
+			numofp++
+		}
+	}
+
+	newUserCounter := 0
+	if numofp < 3 {
+		for i := 0; i < 9; i++ {
+			if TableUsers[i].ConnType == "RESERVED" {
+				TableUsers[i].UserID = nickName[randomNums[newUserCounter]]
+				TableUsers[i].Status = "AUTO"
+				TableUsers[i].ConnType = "ASSINGED"
+				TableUsers[i].IsActivated = false
+				TableUsers[i].Round = 0
+				TableUsers[i].SeatID = i
+				TableUsers[i].Betvol = 100
+				TableUsers[i].Greeting = "Helloo"
+				newUserCounter++
+				if newUserCounter > 2 {
+					break
+				}
+			}
+		}
+	}
+	return TableUsers
+}
+
 func tableInfoDevlivery(delay time.Duration, ch chan rcvMessage) {
 	var t [VOL_TABLE_MAX]*time.Timer
 	delayAuto := 6 * time.Second
@@ -147,19 +183,30 @@ func tableInfoDevlivery(delay time.Duration, ch chan rcvMessage) {
 
 	// TablesUsersMaps := make([]map[string]int, VOL_TABLE_MAX)
 	for i := 0; i < VOL_TABLE_MAX; i++ {
-		// TablesUsersMaps[i] = make(map[string]int, TABLE_PLAYERS_MAX)
 		t[i] = time.NewTimer(delay)
+		for j := 0; j < TABLE_PLAYERS_MAX; j++ {
+			TableUsers[i][j].ConnType = "RESERVED"
+		}
 	}
 
 	for {
 		select {
 		case rcv := <-ch:
-			// save the users info of the specific table
+			// save the users info of the specific table by seatID
 			TableUsers[rcv.TableID][rcv.SeatID] = rcv
-
 			fmt.Println(rcv, "--Received Msg")
-			// fmt.Println(TableUsers)
-			nextPlayerMsg = createNextPlayerMsg(TableUsers[rcv.TableID], rcv.SeatID)
+			switch rcv.ConnType {
+			case "JOINED":
+				TableUsers[rcv.TableID] = createAutoPlayersForSpecificTable(TableUsers[rcv.TableID])
+				sendChan <- TableUsers[rcv.TableID]
+			case "BNEXT":
+				nextPlayerMsg = createNextPlayerMsg(TableUsers[rcv.TableID], rcv.SeatID)
+				TableUsers[nextPlayerMsg.TableID][nextPlayerMsg.SeatID] = nextPlayerMsg
+			default:
+				fmt.Println("Received ConnType:", rcv.ConnType)
+			}
+
+			fmt.Println(TableUsers)
 
 			if nextPlayerMsg.Status == "AUTO" {
 				t[rcv.TableID].Reset(delayAuto)
@@ -170,9 +217,9 @@ func tableInfoDevlivery(delay time.Duration, ch chan rcvMessage) {
 			continue
 		case <-t[0].C:
 			fmt.Println(nextPlayerMsg, "--T1 Timer trigger Send Msg-next player")
-			if nextPlayerMsg.Status == "AUTO" {
-				sendChan <- nextPlayerMsg
-			}
+			//	if nextPlayerMsg.Status == "AUTO" {
+			//		sendChan <- TableUsers[0]
+			//	}
 			t[0].Reset(delay)
 		case <-t[1].C:
 			fmt.Println("T2 no new player message, repeat time interval:", delay)
@@ -201,4 +248,36 @@ func receiveJsonHandler(connection *websocket.Conn) {
 		}
 		ch <- rcv
 	}
+}
+
+//生成count个[start,end)结束的不重复的随机数
+func generateRandomNumber(start int, end int, count int) []int {
+	//范围检查
+	if end < start || (end-start) < count {
+		return nil
+	}
+
+	//存放结果的slice
+	nums := make([]int, 0)
+	//随机数生成器，加入时间戳保证每次生成的随机数不一样
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	for len(nums) < count {
+		//生成随机数
+		num := r.Intn((end - start)) + start
+
+		//查重
+		exist := false
+		for _, v := range nums {
+			if v == num {
+				exist = true
+				break
+			}
+		}
+
+		if !exist {
+			nums = append(nums, num)
+		}
+	}
+
+	return nums
 }
