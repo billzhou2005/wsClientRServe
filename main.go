@@ -2,6 +2,8 @@
 package main
 
 import (
+	"wsClientRServe/csmapi"
+
 	"fmt"
 	"log"
 	"os"
@@ -51,7 +53,7 @@ func main() {
 
 	signal.Notify(interrupt, os.Interrupt) // Notify the interrupt channel for SIGINT
 
-	players := GetPlayersCards(50000012, 6)
+	players := csmapi.GetPlayersCards(50000012, 6)
 	fmt.Println(players)
 
 	socketUrl := "ws://140.143.149.188:9080" + "/ws"
